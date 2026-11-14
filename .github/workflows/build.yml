@@ -1,7 +1,11 @@
 name: Build APK
 on:
   push:
+    paths-ignore:
+      - 'apk/**'
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,3 +21,12 @@ jobs:
         with:
           name: genart-fps-test-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Commit APK ke branch
+        run: |
+          mkdir -p apk
+          cp app/build/outputs/apk/debug/app-debug.apk apk/GenArtFpsTest.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apk/GenArtFpsTest.apk
+          git commit -m "Build APK [skip ci]" || echo "tidak ada perubahan"
+          git push
