@@ -35,6 +35,9 @@ jobs:
             # utamakan .glb; kalau tidak ada, ambil .gltf + .bin + tekstur
             if find x/$k -iname '*.glb' | grep -q .; then
               find x/$k -iname '*.glb' -exec cp {} assets/$k/ \;
+              g=$(dirname "$(find x/$k -iname '*.glb' | head -1)")
+              [ -d "$g/Textures" ] && cp -r "$g/Textures" assets/$k/
+              find x/$k -ipath '*glb*' -iname '*.png' | head -5
             else
               d=$(dirname "$(find x/$k -iname '*.gltf' | head -1)")
               cp -r "$d"/. assets/$k/
