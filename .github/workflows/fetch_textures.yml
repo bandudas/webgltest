@@ -1,0 +1,33 @@
+name: Fetch CC0 textures (Poly Haven)
+on:
+  push:
+    paths:
+      - '.github/workflows/fetch_textures.yml'
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download 1K textures
+        run: |
+          IDS="dark_brick_wall red_brick_03 asphalt_snow concrete_pavement rusty_metal_02 rusted_shutter corrugated_iron dirty_concrete snow_floor metal_plate"
+          for id in $IDS; do
+            mkdir -p textures/$id
+            j=$(curl -fsSL "https://api.polyhaven.com/files/$id")
+            for pair in "Diffuse:diff" "nor_gl:nor" "Rough:rough"; do
+              key=${pair%%:*}; out=${pair##*:}
+              url=$(echo "$j" | jq -r --arg k "$key" '.[$k]["1k"].jpg.url // empty')
+              if [ -n "$url" ]; then curl -fsSL -o textures/$id/$out.jpg "$url" && echo "OK $id $out"; else echo "TIDAK ADA $id $key"; fi
+            done
+          done
+          cat > textures/LICENSE.txt <<'EOT'
+          Tekstur dari Poly Haven (polyhaven.com), lisensi CC0 (domain publik).
+          EOT
+          find textures -type f | sort > textures/FILES.txt; du -sh textures
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add textures && git commit -m "Tekstur CC0 Poly Haven [skip ci]" && git push
