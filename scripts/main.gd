@@ -24,6 +24,22 @@ var _bob := 0.0
 var slowmo := 0.0
 var slowmo_on := false
 
+# mode hantu: setelah diam beberapa detik, kamera melayang sendiri menyusuri jalan
+const IDLE_TO_GHOST := 10.0
+const GHOST_PATH := [
+	Vector2(0, 0), Vector2(-3, -12), Vector2(-4, -26), Vector2(-4, -36), Vector2(4, -40.5), Vector2(9, -43.5),
+	Vector2(17, -43.5), Vector2(19, -45), Vector2(12, -44), Vector2(5, -44), Vector2(-4, -55),
+	Vector2(0, -70), Vector2(3, -85), Vector2(0, -96), Vector2(-4, -80), Vector2(2, -60),
+	Vector2(-5, -36), Vector2(-2, -18), Vector2(0, -2),
+]
+var _idle_t := 0.0
+var ghost_on := false
+var ghost := 0.0
+var _ghost_i := 0
+var _ghost_time := 0.0
+const MusicScript := preload("res://scripts/music.gd")
+var music: Node
+
 var post_mat: ShaderMaterial
 var hud_hint: Label
 var hud_fps: Label
@@ -36,7 +52,10 @@ var _glow_shader: Shader = preload("res://shaders/glow_pool.gdshader")
 var _facade_shader: Shader = preload("res://shaders/facade.gdshader")
 var rng := RandomNumberGenerator.new()
 var _canopy_mats: Array = []
-var _iron: StandardMaterial3D
+var _iron: ShaderMaterial
+var _all_mats: Array = []
+var _lights: Array = []
+var _surface_shader: Shader = preload("res://shaders/surface.gdshader")
 
 # uji otomatis
 var _shot := ""
@@ -58,9 +77,12 @@ func _ready() -> void:
 	_build_props()
 	_build_snow()
 	_flush_batches()
+	_apply_lights()
 	_setup_camera()
 	_setup_hud()
 	_apply_quality()
+	music = MusicScript.new()
+	add_child(music)
 
 
 # ------------------------------------------------------------------ input
@@ -88,6 +110,14 @@ func _setup_input() -> void:
 	_add_action("kanan", [KEY_RIGHT, KEY_D], [JOY_BUTTON_DPAD_RIGHT])
 	_add_action("ok", [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE], [JOY_BUTTON_A])
 	_add_action("menu", [KEY_MENU, KEY_M, KEY_TAB], [JOY_BUTTON_START, JOY_BUTTON_Y])
+
+
+func _input(event: InputEvent) -> void:
+	if event.is_pressed() and (event is InputEventKey or event is InputEventJoypadButton or event is InputEventScreenTouch or event is InputEventMouseButton):
+		_idle_t = 0.0
+		if ghost_on:
+			ghost_on = false
+			get_viewport().set_input_as_handled()   # tombol pertama hanya membangunkan
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -168,33 +198,57 @@ func _adapt(delta: float) -> void:
 
 # ------------------------------------------------------------------ material & mesh
 
-func _mat(id: String, tile: float, tint := Color(1, 1, 1), rough_mul := 1.0, metal := 0.0) -> StandardMaterial3D:
+func _mat(id: String, tile: float, tint := Color(1, 1, 1), rough_mul := 1.0, metal := 0.0) -> ShaderMaterial:
 	var key := "%s|%s|%s|%s|%s" % [id, tile, tint, rough_mul, metal]
 	if _mats.has(key):
 		return _mats[key]
-	var m := StandardMaterial3D.new()
-	m.albedo_texture = load(T + id + "/diff.jpg")
-	m.albedo_color = tint
-	m.normal_enabled = true
-	m.normal_texture = load(T + id + "/nor.jpg")
-	m.roughness_texture = load(T + id + "/rough.jpg")
-	m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
-	m.roughness = rough_mul
-	m.metallic = metal
-	m.uv1_scale = Vector3(1.0 / tile, 1.0 / tile, 1.0)
+	var m := ShaderMaterial.new()
+	m.shader = _surface_shader
+	m.set_shader_parameter("tex_albedo", load(T + id + "/diff.jpg"))
+	m.set_shader_parameter("tex_normal", load(T + id + "/nor.jpg"))
+	m.set_shader_parameter("tex_rough", load(T + id + "/rough.jpg"))
+	m.set_shader_parameter("tint", Vector3(tint.r, tint.g, tint.b))
+	m.set_shader_parameter("tile", tile)
+	m.set_shader_parameter("rough", rough_mul)
+	m.set_shader_parameter("spec_amt", 0.35 + metal)
 	_mats[key] = m
+	_all_mats.append(m)
 	return m
 
 
-func _flat(col: Color, rough := 0.6, metal := 0.0, emis := Color(0, 0, 0)) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = col
-	m.roughness = rough
-	m.metallic = metal
-	if emis != Color(0, 0, 0):
-		m.emission_enabled = true
-		m.emission = emis
+func _flat(col: Color, rough := 0.6, metal := 0.0, emis := Color(0, 0, 0)) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = _surface_shader
+	m.set_shader_parameter("use_normal", false)
+	m.set_shader_parameter("use_rough_tex", false)
+	m.set_shader_parameter("tint", Vector3(col.r, col.g, col.b))
+	m.set_shader_parameter("rough", rough)
+	m.set_shader_parameter("spec_amt", 0.4 + metal)
+	m.set_shader_parameter("emission", Vector3(emis.r, emis.g, emis.b))
+	_all_mats.append(m)
 	return m
+
+
+## Daftarkan lampu (dihitung di shader, bukan OmniLight3D).
+func _add_light(p: Vector3, col: Color, energy: float, rng_m: float, channel := -1) -> void:
+	_lights.append([p, rng_m, Vector3(col.r, col.g, col.b) * energy, channel])
+
+
+func _apply_lights() -> void:
+	var lp := PackedVector4Array()
+	var lc := PackedVector4Array()
+	for L in _lights:
+		var p: Vector3 = L[0]
+		var c: Vector3 = L[2]
+		lp.append(Vector4(p.x, p.y, p.z, L[1]))
+		lc.append(Vector4(c.x, c.y, c.z, float(L[3])))
+	while lp.size() < 10:
+		lp.append(Vector4(0, -100, 0, 0.01))
+		lc.append(Vector4(0, 0, 0, -1))
+	for m in _all_mats:
+		(m as ShaderMaterial).set_shader_parameter("light_count", mini(_lights.size(), 10))
+		(m as ShaderMaterial).set_shader_parameter("lpos", lp)
+		(m as ShaderMaterial).set_shader_parameter("lcol", lc)
 
 
 ## Kotak dengan UV dalam meter (supaya tekstur foto tidak melar di kotak berbagai ukuran).
@@ -285,11 +339,12 @@ func _facade(id: String, seed_v: float, height: float, tint := Color(1, 1, 1), l
 	m.set_shader_parameter("tex_normal", load(T + id + "/nor.jpg"))
 	m.set_shader_parameter("tex_rough", load(T + id + "/rough.jpg"))
 	m.set_shader_parameter("tile", 3.0)
-	m.set_shader_parameter("tint", tint)
+	m.set_shader_parameter("tint", Vector3(tint.r, tint.g, tint.b))
 	m.set_shader_parameter("seed", seed_v)
 	m.set_shader_parameter("top_h", height)
 	m.set_shader_parameter("lit_ratio", lit)
 	m.set_shader_parameter("win_w", rng.randf_range(2.4, 3.2))
+	_all_mats.append(m)
 	return m
 
 
@@ -311,11 +366,6 @@ func _setup_env() -> void:
 	we.environment = env
 	add_child(we)
 
-	var moon := DirectionalLight3D.new()
-	moon.light_color = Color(0.45, 0.55, 0.85)
-	moon.light_energy = 0.22
-	moon.rotation_degrees = Vector3(-55, 35, 0)
-	add_child(moon)
 
 
 # Jalan utama sepanjang -Z: aspal x[-5,5], trotoar x[-8,-5] dan [5,8].
@@ -394,13 +444,7 @@ func _build_alley() -> void:
 	var bulb := _flat(Color(0.3, 0.3, 0.3), 0.4, 0.0, Color(1.0, 0.75, 0.45) * 1.5)
 	_box(Vector3(0.35, 0.25, 0.25), Vector3(18.5, 3.3, -46.6), bulb)
 	_box(Vector3(1.2, 2.4, 0.08), Vector3(18.5, 1.2, -46.95), _mat("rusty_metal_02", 1.5, Color(0.35, 0.4, 0.45), 1.0, 0.6))
-	var wl := OmniLight3D.new()
-	wl.light_color = Color(1.0, 0.7, 0.42)
-	wl.light_energy = 2.5
-	wl.omni_range = 9.0
-	wl.omni_attenuation = 1.2
-	wl.position = Vector3(18.5, 3.0, -46.0)
-	add_child(wl)
+	_add_light(Vector3(18.5, 3.0, -46.0), Color(1.0, 0.7, 0.42), 1.6, 9.0)
 
 
 func _build_end() -> void:
@@ -433,14 +477,9 @@ func _neon(text: String, p: Vector3, yaw_v: float, col: Color, vertical: bool, s
 	var dims := Vector3(0.12, 7.5, 1.8) if vertical else Vector3(0.12, 1.4, 1.2 * text.length() * size + 0.6)
 	var bp := p + Vector3(-signf(sin(yaw_v)) * 0.08, 0, 0)
 	_box(dims, bp, backing)
-	var o := OmniLight3D.new()
-	o.light_color = col
-	o.light_energy = 1.6
-	o.omni_range = 9.0
-	o.omni_attenuation = 1.4
-	o.position = p + Vector3(sin(yaw_v) * 1.5, 0, cos(yaw_v) * 1.5)
-	add_child(o)
-	_neons.append([l, o, 1.6, rng.randf() * 10.0])
+	var ch := _neons.size()
+	_add_light(p + Vector3(sin(yaw_v) * 1.5, 0, cos(yaw_v) * 1.5), col, 1.3, 9.0, ch)
+	_neons.append([l, ch, rng.randf() * 10.0])
 
 
 func _build_lamps() -> void:
@@ -454,13 +493,7 @@ func _build_lamps() -> void:
 		_cyl(0.09, 6.4, Vector3(x, 3.2, z), pole, 8)
 		_bbox(Vector3(1.6, 0.08, 0.08), Vector3(x - side * 0.8, 6.35, z), pole)
 		_box(Vector3(0.7, 0.18, 0.35), Vector3(x - side * 1.5, 6.25, z), head)
-		var o := OmniLight3D.new()
-		o.light_color = Color(1.0, 0.62, 0.3)
-		o.light_energy = 5.0
-		o.omni_range = 16.0
-		o.omni_attenuation = 1.1
-		o.position = Vector3(x - side * 1.5, 5.9, z)
-		add_child(o)
+		_add_light(Vector3(x - side * 1.5, 5.9, z), Color(1.0, 0.62, 0.3), 3.0, 17.0)
 		var pool := MeshInstance3D.new()
 		var q := QuadMesh.new()
 		q.size = Vector2(11, 11)
@@ -548,6 +581,10 @@ func _steam(p: Vector3) -> void:
 	m.vertex_color_use_as_albedo = true
 	m.albedo_color = Color(0.75, 0.75, 0.8)
 	m.albedo_texture = _soft_dot()
+	# memudar saat kamera menembus uap, supaya layar tidak memutih
+	m.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+	m.distance_fade_min_distance = 0.6
+	m.distance_fade_max_distance = 3.5
 	q.material = m
 	g.draw_pass_1 = q
 	g.visibility_aabb = AABB(Vector3(-3, -1, -3), Vector3(6, 8, 6))
@@ -573,7 +610,7 @@ func _soft_dot() -> GradientTexture2D:
 
 func _build_snow() -> void:
 	_snow = GPUParticles3D.new()
-	_snow.amount = 1400
+	_snow.amount = 700
 	_snow.lifetime = 9.0
 	_snow.preprocess = 9.0
 	_snow.local_coords = false
@@ -589,7 +626,7 @@ func _build_snow() -> void:
 	pm.scale_max = 1.4
 	_snow.process_material = pm
 	var q := QuadMesh.new()
-	q.size = Vector2(0.06, 0.06)
+	q.size = Vector2(0.08, 0.08)
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -634,7 +671,7 @@ func _setup_hud() -> void:
 	hud_hint.add_theme_color_override("font_color", Color(0.92, 0.9, 0.85))
 	hud_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	hud_hint.add_theme_constant_override("outline_size", 5)
-	hud_hint.text = "Atas/Bawah: jalan    Kiri/Kanan: menoleh    OK: gerak lambat    Menu: grafis"
+	hud_hint.text = "Atas/Bawah: jalan    Kiri/Kanan: menoleh    OK: gerak lambat    Menu: grafis\nDiam 10 detik: mode hantu"
 	layer.add_child(hud_hint)
 	hud_fps = Label.new()
 	hud_fps.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8, 0.7))
@@ -658,23 +695,36 @@ func _process(delta: float) -> void:
 
 	var walk := Input.get_action_strength("maju") - Input.get_action_strength("mundur")
 	var turn := Input.get_action_strength("kiri") - Input.get_action_strength("kanan")
-	yaw += turn * TURN * real
+	if absf(walk) > 0.01 or absf(turn) > 0.01:
+		_idle_t = 0.0
+	else:
+		_idle_t += real
+	if not ghost_on and _idle_t > IDLE_TO_GHOST:
+		_start_ghost()
+	ghost = move_toward(ghost, 1.0 if ghost_on else 0.0, real * 0.5)
+	if ghost_on:
+		_ghost_step(real)
+	else:
+		yaw += turn * TURN * real
+		var f := Vector3(-sin(yaw), 0, -cos(yaw))
+		pos += f * walk * WALK * real
+		_bob += absf(walk) * real * 7.5
 	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
-	pos += fwd * walk * WALK * real
-	_bob += absf(walk) * real * 7.5
 	_clamp_pos()
+	post_mat.set_shader_parameter("ghost", ghost)
+	music.set("slowmo", slowmo)
 	_update_camera(real)
 	_snow.global_position = Vector3(pos.x, 12.0, pos.z) + fwd * 6.0
 
 	var t := Time.get_ticks_msec() / 1000.0 * lerpf(1.0, 0.25, slowmo)
 	for n in _neons:
-		var ph: float = n[3]
+		var ph: float = n[2]
 		var flick := 1.0
 		var s := sin(t * 23.0 + ph) * sin(t * 3.1 + ph * 2.0)
 		if s > 0.93:
 			flick = 0.25
 		(n[0] as Label3D).modulate.a = flick
-		(n[1] as OmniLight3D).light_energy = float(n[2]) * flick
+		RenderingServer.global_shader_parameter_set("neon%d" % int(n[1]), flick)
 
 	_adapt(real)
 	if _hint_t > 0.0:
@@ -682,6 +732,34 @@ func _process(delta: float) -> void:
 		hud_hint.modulate.a = clampf(_hint_t, 0.0, 1.0)
 	hud_fps.text = "%d FPS  %s%s" % [Engine.get_frames_per_second(), QUALITY[quality][2], " oto" if auto_quality else ""]
 	_test_hook()
+
+
+func _start_ghost() -> void:
+	ghost_on = true
+	# mulai dari titik jalur terdekat yang ada di depan
+	var best := 0
+	var bd := INF
+	for i in GHOST_PATH.size():
+		var w: Vector2 = GHOST_PATH[i]
+		var d := Vector2(pos.x, pos.z).distance_to(w)
+		if d < bd and d > 3.0:
+			bd = d
+			best = i
+	_ghost_i = best
+	_hint("Mode hantu. Tekan tombol apa saja untuk kembali.", 4.0)
+
+
+func _ghost_step(dt: float) -> void:
+	_ghost_time += dt
+	var target: Vector2 = GHOST_PATH[_ghost_i]
+	var to := target - Vector2(pos.x, pos.z)
+	if to.length() < 2.5:
+		_ghost_i = (_ghost_i + 1) % GHOST_PATH.size()
+		return
+	var want := atan2(-to.x, -to.y)
+	yaw = lerp_angle(yaw, want, 1.0 - exp(-0.7 * dt))
+	var f := Vector3(-sin(yaw), 0, -cos(yaw))
+	pos += f * 1.1 * dt * ghost
 
 
 func _clamp_pos() -> void:
@@ -694,8 +772,13 @@ func _clamp_pos() -> void:
 
 func _update_camera(delta: float) -> void:
 	var ground := 0.15 if absf(pos.x) > 5.0 and pos.x < 8.0 else 0.0
-	cam.position = Vector3(pos.x, ground + EYE + sin(_bob) * 0.035, pos.z)
-	cam.rotation = Vector3(-0.04 + sin(_bob * 0.5) * 0.004, yaw, sin(_bob * 0.5) * 0.006)
+	var gt := _ghost_time
+	var float_h := ghost * (0.45 + 0.3 * sin(gt * 0.5))
+	var glance := ghost * sin(gt * 0.13) * 0.45
+	var look_up := ghost * 0.09 * sin(gt * 0.21)
+	cam.position = Vector3(pos.x, ground + EYE + float_h + sin(_bob) * 0.035, pos.z)
+	cam.rotation = Vector3(-0.04 + look_up + sin(_bob * 0.5) * 0.004, yaw + glance,
+		sin(_bob * 0.5) * 0.006 + ghost * 0.035 * sin(gt * 0.3))
 
 
 # ------------------------------------------------------------------ uji otomatis
@@ -717,6 +800,9 @@ func _parse_args() -> void:
 				slowmo_on = kv[1] == "1"
 				slowmo = 1.0 if slowmo_on else 0.0
 			"nopost": _nopost = kv[1] == "1"
+			"ghost":
+				if kv[1] == "1":
+					_idle_t = 999.0
 			"q":
 				quality = int(kv[1])
 				auto_quality = false

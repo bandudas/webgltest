@@ -3,6 +3,7 @@ shader_type canvas_item;
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
 uniform float slowmo = 0.0;
+uniform float ghost = 0.0;
 uniform float time_s = 0.0;
 uniform vec2 res = vec2(854.0, 480.0);
 
@@ -12,6 +13,12 @@ float hash(vec2 p) {
 
 void fragment() {
 	vec3 c = texture(screen_tex, SCREEN_UV).rgb * 1.3;
+	if (ghost > 0.01) {
+		// bayangan ganda tipis yang bergoyang: pandangan hantu
+		vec2 off = vec2(sin(time_s * 0.7), cos(time_s * 0.53)) * 0.006 * ghost;
+		c = mix(c, texture(screen_tex, SCREEN_UV + off).rgb * 1.3, 0.35 * ghost);
+		c = mix(c, c * vec3(0.85, 0.95, 1.15), 0.5 * ghost);
+	}
 	float l = dot(c, vec3(0.299, 0.587, 0.114));
 	vec3 g = mix(vec3(l), c, 0.8 - 0.55 * slowmo);
 	g += vec3(-0.012, 0.0, 0.03) * (1.0 - l) + vec3(0.035, 0.018, -0.02) * l;
