@@ -74,8 +74,8 @@ func step(delta: float, wave_t: float) -> void:
 
 func _make_wake() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
-	p.amount = 90
-	p.lifetime = 2.8
+	p.amount = 45
+	p.lifetime = 2.2
 	p.local_coords = false
 	p.position = Vector3(0, 0.05, -1.9)
 	var q := QuadMesh.new()

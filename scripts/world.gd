@@ -7,8 +7,8 @@ const P := "res://assets/pirate/"
 const W := "res://assets/water/"
 const COAST_SAMPLES := 64
 const WORLD_RADIUS := 330.0
-const DECOR_RANGE := 170.0
-const SMALL_RANGE := 90.0
+const DECOR_RANGE := 130.0
+const SMALL_RANGE := 55.0
 
 var rng := RandomNumberGenerator.new()
 var islands: Array = []      # Dictionary per pulau
@@ -418,7 +418,7 @@ func _add_npc(path: String, center: Vector3, radius: float, speed: float, sink: 
 	var model: Node3D = load(path).instantiate()
 	model.position.y = sink
 	root.add_child(model)
-	_set_range(model, 300.0)
+	_set_range(model, 240.0)
 	var d := {"node": root, "center": center, "radius": radius, "speed": speed, "angle": phase}
 	npcs.append(d)
 	return d

@@ -25,7 +25,21 @@ var tod := 0.30
 var wave_t := 0.0
 var night := 0.0
 var cam_mode := 0
-var quality := 0              # 0 = tinggi, 1 = rendah
+# [lebar, tinggi, bayangan, nama]
+const QUALITY := [
+	[640, 360, false, "360p"],
+	[854, 480, false, "480p"],
+	[960, 540, false, "540p"],
+	[1280, 720, true, "720p + bayangan"],
+]
+var quality := 1
+var auto_quality := true
+var _adapt_time := 0.0
+var _adapt_frames := 0
+var _adapt_wait := 4.0        # beri waktu pemanasan sebelum mulai menyesuaikan
+var _sky_timer := 0.0
+var _hud_timer := 0.0
+var _labels: Array = []
 var found := 0
 
 var world: World
@@ -74,7 +88,7 @@ func _ready() -> void:
 	cam = Camera3D.new()
 	cam.fov = 62.0
 	cam.near = 0.3
-	cam.far = 420.0
+	cam.far = 280.0
 	add_child(cam)
 	_place_camera(1.0, true)
 
@@ -125,9 +139,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			cam_mode = (cam_mode + 1) % 3
 			_show_msg(["Kamera: normal", "Kamera: jauh", "Kamera: dekat air"][cam_mode], 1.5)
 	elif event.is_action_pressed("menu"):
-		quality = 1 - quality
+		# Otomatis -> 360p -> 480p -> 540p -> 720p+bayangan -> Otomatis
+		if auto_quality:
+			auto_quality = false
+			quality = 0
+		elif quality < QUALITY.size() - 1:
+			quality += 1
+		else:
+			auto_quality = true
+			quality = 1
+			_adapt_wait = 3.0
 		_apply_quality()
-		_show_msg("Grafis: " + ("tinggi (720p, bayangan)" if quality == 0 else "ringan (540p, tanpa bayangan)"), 2.0)
+		_show_msg("Grafis: " + ("otomatis" if auto_quality else QUALITY[quality][3]), 2.0)
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		_back_pressed()
 
@@ -147,13 +170,43 @@ func _back_pressed() -> void:
 
 
 func _apply_quality() -> void:
-	var w := get_window()
-	if quality == 0:
-		w.content_scale_size = Vector2i(1280, 720)
-		sun.shadow_enabled = true
-	else:
-		w.content_scale_size = Vector2i(960, 540)
-		sun.shadow_enabled = false
+	var q: Array = QUALITY[quality]
+	get_window().content_scale_size = Vector2i(q[0], q[1])
+	sun.shadow_enabled = q[2]
+	# HUD ikut skala resolusi supaya ukurannya tetap sama di layar
+	var k: float = float(q[1]) / 720.0
+	for item in _labels:
+		(item[0] as Label).add_theme_font_size_override("font_size", maxi(10, int(item[1] * k)))
+		(item[0] as Label).add_theme_constant_override("outline_size", maxi(2, int(6 * k)))
+	if hud_top:
+		hud_top.position = Vector2(24, 16) * k
+		hud_right.position = Vector2(-24, 16) * k
+		hud_msg.position.y = -40 * k
+
+
+func _adapt_quality(delta: float) -> void:
+	if not auto_quality:
+		return
+	if _adapt_wait > 0.0:
+		_adapt_wait -= delta
+		_adapt_time = 0.0
+		_adapt_frames = 0
+		return
+	_adapt_time += delta
+	_adapt_frames += 1
+	if _adapt_time < 3.0:
+		return
+	var fps := _adapt_frames / _adapt_time
+	_adapt_time = 0.0
+	_adapt_frames = 0
+	if fps < 26.0 and quality > 0:
+		quality -= 1
+		_apply_quality()
+		_adapt_wait = 2.0
+	elif fps > 52.0 and quality < 2:
+		quality += 1
+		_apply_quality()
+		_adapt_wait = 2.0
 
 
 # ------------------------------------------------------------------ lingkungan
@@ -172,14 +225,14 @@ func _setup_environment() -> void:
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.fog_enabled = true
-	env.fog_density = 0.0032
+	env.fog_density = 0.0055
 	env.fog_sky_affect = 0.0
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 
 	sun = DirectionalLight3D.new()
-	sun.shadow_enabled = true
+	sun.shadow_enabled = false
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun.directional_shadow_max_distance = 70.0
 	sun.shadow_bias = 0.08
@@ -193,9 +246,9 @@ func _setup_environment() -> void:
 
 func _setup_water() -> void:
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(720, 720)
-	plane.subdivide_width = 119
-	plane.subdivide_depth = 119
+	plane.size = Vector2(500, 500)
+	plane.subdivide_width = 71
+	plane.subdivide_depth = 71
 	water_mat = ShaderMaterial.new()
 	water_mat.shader = preload("res://shaders/water.gdshader")
 	water_mat.set_shader_parameter("island_count", world.islands.size())
@@ -255,6 +308,15 @@ func _update_sky() -> void:
 	water_mat.set_shader_parameter("deep_color", Color(0.02, 0.05, 0.12).lerp(Color(0.04, 0.27, 0.42), clampf(day * 1.4, 0.0, 1.0)))
 	water_mat.set_shader_parameter("shallow_color", Color(0.03, 0.10, 0.14).lerp(Color(0.16, 0.60, 0.62), day))
 	water_mat.set_shader_parameter("sky_color", hor.lerp(top, 0.3))
+	if night < 0.5:
+		water_mat.set_shader_parameter("light_dir", sun_dir)
+		water_mat.set_shader_parameter("light_color", sun_col)
+		water_mat.set_shader_parameter("light_strength", sun.light_energy)
+	else:
+		water_mat.set_shader_parameter("light_dir", moon_dir)
+		water_mat.set_shader_parameter("light_color", moon.light_color)
+		water_mat.set_shader_parameter("light_strength", moon.light_energy)
+	water_mat.set_shader_parameter("ambient", amb * env.ambient_light_energy)
 
 
 # ------------------------------------------------------------------ loop
@@ -263,7 +325,11 @@ func _process(delta: float) -> void:
 	delta = minf(delta, 0.1)
 	wave_t += delta
 	tod = fposmod(tod + delta / DAY_LENGTH, 1.0)
-	_update_sky()
+	_sky_timer -= delta
+	if _sky_timer <= 0.0:
+		_sky_timer = 0.5   # langit berubah pelan; tidak perlu tiap frame
+		_update_sky()
+	_adapt_quality(delta)
 
 	boat.step(delta, wave_t)
 	var res: Array = world.push_out(boat.position, Boat.RADIUS)
@@ -282,7 +348,10 @@ func _process(delta: float) -> void:
 	water_mat.set_shader_parameter("wave_time", wave_t)
 
 	_place_camera(delta, false)
-	_update_hud(delta)
+	_hud_timer += delta
+	if _hud_timer >= 0.25:
+		_update_hud(_hud_timer)
+		_hud_timer = 0.0
 	_test_hook()
 
 
@@ -371,21 +440,28 @@ func _setup_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	hud_top = _make_label(22)
+	_labels.append([hud_top, 22])
 	hud_top.position = Vector2(24, 16)
 	layer.add_child(hud_top)
 	hud_right = _make_label(22)
+	_labels.append([hud_right, 22])
 	hud_right.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	hud_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	hud_right.position = Vector2(-24, 16)
 	hud_right.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	layer.add_child(hud_right)
 	hud_msg = _make_label(26)
+	_labels.append([hud_msg, 26])
 	hud_msg.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	hud_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hud_msg.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	hud_msg.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	hud_msg.position.y = -40
 	layer.add_child(hud_msg)
+
+
+func _fps_text() -> String:
+	return "FPS %d  %s%s" % [int(_fps), QUALITY[quality][3], " (oto)" if auto_quality else ""]
 
 
 func _show_msg(text: String, secs: float) -> void:
@@ -397,9 +473,8 @@ func _show_msg(text: String, secs: float) -> void:
 
 func _update_hud(delta: float) -> void:
 	_fps_acc += delta
-	_fps_frames += 1
 	if _fps_acc >= 0.5:
-		_fps = _fps_frames / _fps_acc
+		_fps = Engine.get_frames_per_second()
 		_fps_acc = 0.0
 		_fps_frames = 0
 
@@ -410,7 +485,7 @@ func _update_hud(delta: float) -> void:
 
 	var isl := world.nearest_chest(boat.position)
 	if isl.is_empty():
-		hud_right.text = "Semua harta ditemukan\nFPS %d" % int(_fps)
+		hud_right.text = "Semua harta ditemukan\n%s" % _fps_text()
 	else:
 		var cp: Vector3 = isl.chest.global_position
 		var to := Vector3(cp.x - boat.position.x, 0, cp.z - boat.position.z)
@@ -426,12 +501,12 @@ func _update_hud(delta: float) -> void:
 		elif ang < -20.0:
 			arah = "belok kiri"
 		if dist <= OPEN_DIST:
-			hud_right.text = "Peti di dekatmu!\nFPS %d" % int(_fps)
+			hud_right.text = "Peti di dekatmu!\n%s" % _fps_text()
 			if _msg_time <= 0.0:
 				hud_msg.text = "Tekan OK untuk membuka peti"
 				hud_msg.modulate.a = 1.0
 		else:
-			hud_right.text = "Peti terdekat: %d m, %s\nFPS %d" % [int(dist), arah, int(_fps)]
+			hud_right.text = "Peti terdekat: %d m, %s\n%s" % [int(dist), arah, _fps_text()]
 
 	if _msg_time > 0.0:
 		_msg_time -= delta
@@ -454,6 +529,9 @@ func _parse_test_args() -> void:
 			"tod": tod = float(kv[1])
 			"cam": cam_mode = int(kv[1])
 			"side": _side_view = kv[1] == "1"
+			"q":
+				quality = int(kv[1])
+				auto_quality = false
 
 
 func _apply_late_test_args() -> void:
@@ -478,5 +556,9 @@ func _test_hook() -> void:
 	if _shot_path != "" and _frame == max(_shot_frames, 5):
 		var img := get_viewport().get_texture().get_image()
 		img.save_png(_shot_path)
-		print("SHOT ", _shot_path, " fps=", Engine.get_frames_per_second(), " islands=", world.islands.size())
+		print("SHOT ", _shot_path, " fps=", Engine.get_frames_per_second(), " islands=", world.islands.size(),
+			" draws=", Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+			" objs=", Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME),
+			" prims=", Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME),
+			" proc_ms=", Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0)
 		get_tree().quit()
