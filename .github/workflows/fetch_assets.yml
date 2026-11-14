@@ -1,0 +1,53 @@
+name: Fetch CC0 assets
+on:
+  push:
+    paths:
+      - '.github/workflows/fetch_assets.yml'
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Kenney kits (CC0)
+        run: |
+          set -x
+          UA="Mozilla/5.0 (X11; Linux x86_64)"
+          get() { out=$1; shift; for u in "$@"; do if curl -fsSL -A "$UA" -o "$out" "$u" && unzip -tq "$out" >/dev/null 2>&1; then echo "OK $u"; return 0; fi; done; echo "GAGAL $out"; return 1; }
+          mkdir -p dl
+          get dl/pirate.zip \
+            https://opengameart.org/sites/default/files/kenney_pirate-kit.zip \
+            https://opengameart.org/sites/default/files/kenney_pirate-kit_2.1.zip \
+            https://opengameart.org/sites/default/files/kenney_piratekit.zip || true
+          get dl/water.zip \
+            https://opengameart.org/sites/default/files/kenney_watercraft_kit.zip \
+            https://opengameart.org/sites/default/files/kenney_watercraft-kit.zip \
+            https://opengameart.org/sites/default/files/kenney_watercraft-pack.zip || true
+          ls -la dl
+      - name: Extract glTF models
+        run: |
+          for k in pirate water; do
+            [ -f dl/$k.zip ] || continue
+            mkdir -p x/$k && unzip -q dl/$k.zip -d x/$k
+            find x/$k -maxdepth 3 -type d | head -30
+            mkdir -p assets/$k
+            # utamakan .glb; kalau tidak ada, ambil .gltf + .bin + tekstur
+            if find x/$k -iname '*.glb' | grep -q .; then
+              find x/$k -iname '*.glb' -exec cp {} assets/$k/ \;
+            else
+              d=$(dirname "$(find x/$k -iname '*.gltf' | head -1)")
+              cp -r "$d"/. assets/$k/
+            fi
+            find x/$k -iname 'licen*' -exec cp {} assets/$k/ \; || true
+            find x/$k -iname 'preview*.png' -exec cp {} assets/$k/ \; || true
+          done
+          find assets -type f | sort > assets/FILES.txt
+          cat assets/FILES.txt
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets
+          git commit -m "Aset CC0 Kenney [skip ci]" || echo kosong
+          git push
