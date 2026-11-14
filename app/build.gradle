@@ -1,0 +1,35 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'id.genart.fpstest'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "id.genart.fpstest"
+        minSdk 21
+        // 29 = Android 10, sama dengan box target; menghindari pembatasan Android baru.
+        targetSdk 29
+        versionCode 1
+        versionName "1.0"
+        // Tanpa kode native -> APK otomatis jalan di box 32-bit (armeabi-v7a) maupun 64-bit.
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Ditandatangani dengan kunci debug supaya bisa langsung di-install (sideload).
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+    }
+}
