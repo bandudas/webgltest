@@ -7,7 +7,7 @@ Tujuannya mengukur batas GPU box sebelum menentukan gaya generative art.
 
 | Tombol | Fungsi |
 |---|---|
-| KIRI / KANAN | Ganti mode (shader, flow field, overdraw) |
+| KIRI / KANAN | Ganti mode (shader, flow field, overdraw, 3D objek, 3D bola) |
 | ATAS / BAWAH | Naik / turun level beban (1-5) |
 | OK / ENTER | Ganti mode resolusi: AUTO, 720p, 540p, 360p |
 | MENU | Sembunyikan / tampilkan HUD |
@@ -19,6 +19,8 @@ Layar sentuh / air mouse: sepertiga kiri/kanan = ganti mode, pita atas/bawah = l
 1. **Shader prosedural** - fbm noise; level = jumlah oktaf (1, 2, 3, 4, 6). Menguji beban fragment shader.
 2. **Flow field + jejak** - partikel disimulasikan di GPU (transform feedback) dengan jejak memudar; level = 4k, 8k, 16k, 32k, 64k partikel.
 3. **Overdraw** - blob additive besar bertumpuk; level = 4, 8, 16, 32, 64 lapis. Menguji fill-rate dan bandwidth memori.
+4. **3D: objek low-poly** - icosphere 80 segitiga yang di-instancing membentuk spiral berputar, flat shading + rim light + kabut; level = 64, 256, 1024, 2048, 4096 objek (5k-328k segitiga). Menguji jumlah objek dan vertex throughput.
+5. **3D: bola berdeformasi** - satu icosphere yang dideformasi gelombang di vertex shader; level = subdivisi 2-6 (320-81.920 segitiga). Menguji kepadatan mesh.
 
 Scene dirender ke framebuffer beresolusi lebih rendah lalu di-scale ke layar.
 Mode AUTO menurunkan resolusi (minimum 288p) saat FPS di bawah ~93% refresh rate layar,
