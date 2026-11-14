@@ -4,6 +4,8 @@ on:
     paths-ignore:
       - '.github/workflows/fetch_assets.yml'
       - 'README.md'
+      - 'CLAUDE.md'
+      - 'MIGRASI.md'
   workflow_dispatch:
 permissions:
   contents: write
