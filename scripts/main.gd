@@ -180,8 +180,16 @@ func _apply_quality() -> void:
 		(item[0] as Label).add_theme_constant_override("outline_size", maxi(2, int(6 * k)))
 	if hud_top:
 		hud_top.position = Vector2(24, 16) * k
-		hud_right.position = Vector2(-24, 16) * k
-		hud_msg.position.y = -40 * k
+		_layout_hud()
+
+
+func _layout_hud() -> void:
+	var k: float = float(QUALITY[quality][1]) / 720.0
+	hud_right.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, int(20 * k))
+	hud_right.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	hud_msg.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, int(36 * k))
+	hud_msg.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	hud_msg.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
 
 func _adapt_quality(delta: float) -> void:
